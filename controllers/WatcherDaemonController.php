@@ -27,7 +27,7 @@ abstract class WatcherDaemonController extends DaemonController
     public function init()
     {
         $pid_file = $this->getPidPath();
-        if (file_exists($pid_file) && ($pid = file_get_contents($pid_file)) && file_exists("/proc/$pid")) {
+        if (is_file($pid_file) && file_exists($pid_file) && ($pid = file_get_contents($pid_file)) && file_exists("/proc/$pid")) {
             $this->halt(self::EXIT_CODE_ERROR, 'Another Watcher is already running.');
         }
         parent::init();
@@ -45,7 +45,7 @@ abstract class WatcherDaemonController extends DaemonController
         $pid_file = $this->getPidPath($job['daemon']);
 
         \Yii::trace('Check daemon ' . $job['daemon']);
-        if (file_exists($pid_file)) {
+        if (is_file($pid_file) && file_exists($pid_file)) {
             $pid = file_get_contents($pid_file);
             if ($this->isProcessRunning($pid)) {
                 if ($job['enabled']) {
