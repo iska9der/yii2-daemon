@@ -253,7 +253,7 @@ abstract class DaemonController extends Controller
      *
      * * @return boolean 0|1
      */
-    final private function loop()
+    private function loop()
     {
         if (file_put_contents($this->getPidPath(), getmypid())) {
             $this->parentPID = getmypid();
