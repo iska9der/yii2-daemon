@@ -2,8 +2,12 @@
 
 namespace vyants\daemon;
 
+use yii\base\Action;
+use yii\base\ExitException;
 use yii\base\NotSupportedException;
 use yii\console\Controller;
+use yii\console\ExitCode;
+use yii\db\Exception;
 use yii\helpers\Console;
 
 /**
@@ -126,19 +130,20 @@ abstract class DaemonController extends Controller
     abstract protected function doJob($job);
 
     /**
-     * Base action, you can\t override or create another actions
-     * @return bool
-     * @throws NotSupportedException
+     * Base action
+     * @return int|null
+     * @throws Exception
+     * @throws ExitException
      */
     final public function actionIndex()
     {
         if ($this->demonize) {
             $pid = pcntl_fork();
             if ($pid == -1) {
-                $this->halt(self::EXIT_CODE_ERROR, 'pcntl_fork() rise error');
+                $this->halt(ExitCode::UNSPECIFIED_ERROR, 'pcntl_fork() rise error');
             } elseif ($pid) {
                 $this->cleanLog();
-                $this->halt(self::EXIT_CODE_NORMAL);
+                $this->halt(ExitCode::OK);
             } else {
                 posix_setsid();
                 $this->closeStdStreams();
@@ -188,27 +193,27 @@ abstract class DaemonController extends Controller
     }
 
     /**
-     * Prevent non index action running
+     * Init logger
      *
-     * @param \yii\base\Action $action
+     * @param Action $action
      *
      * @return bool
      * @throws NotSupportedException
      */
     public function beforeAction($action)
     {
-        if (parent::beforeAction($action)) {
-            $this->initLogger();
-            if ($action->id != "index") {
-                throw new NotSupportedException(
-                    "Only index action allowed in daemons. So, don't create and call another"
-                );
-            }
-
-            return true;
-        } else {
+        if (!parent::beforeAction($action)) {
             return false;
         }
+
+        $this->initLogger();
+        if ($action->id != "index") {
+            throw new NotSupportedException(
+                "Only index action allowed in daemons. So, don't create and call another"
+            );
+        }
+
+        return true;
     }
 
     /**
@@ -239,7 +244,7 @@ abstract class DaemonController extends Controller
     /**
      * Fetch one task from array of tasks
      *
-     * @param Array
+     * @param array $jobs
      *
      * @return mixed one task
      */
@@ -251,57 +256,64 @@ abstract class DaemonController extends Controller
     /**
      * Main Loop
      *
-     * * @return boolean 0|1
+     * *
+     * @return int 0|1
+     * @throws Exception
+     * @throws ExitException
      */
     private function loop()
     {
-        if (file_put_contents($this->getPidPath(), getmypid())) {
-            $this->parentPID = getmypid();
-            \Yii::trace('Daemon ' . $this->getProcessName() . ' pid ' . getmypid() . ' started.');
-            while (!self::$stopFlag) {
-                if (memory_get_usage() > $this->memoryLimit) {
-                    \Yii::trace('Daemon ' . $this->getProcessName() . ' pid ' .
-                        getmypid() . ' used ' . memory_get_usage() . ' bytes on ' . $this->memoryLimit .
-                        ' bytes allowed by memory limit');
-                    break;
-                }
-                $this->trigger(self::EVENT_BEFORE_ITERATION);
-                $this->renewConnections();
-                $jobs = $this->defineJobs();
-                if ($jobs && !empty($jobs)) {
-                    while (($job = $this->defineJobExtractor($jobs)) !== null) {
-                        //if no free workers, wait
-                        if ($this->isMultiInstance && (count(static::$currentJobs) >= $this->maxChildProcesses)) {
-                            \Yii::trace('Reached maximum number of child processes. Waiting...');
-                            while (count(static::$currentJobs) >= $this->maxChildProcesses) {
-                                sleep(1);
-                                pcntl_signal_dispatch();
-                            }
-                            \Yii::trace(
-                                'Free workers found: ' .
-                                ($this->maxChildProcesses - count(static::$currentJobs)) .
-                                ' worker(s). Delegate tasks.'
-                            );
-                        }
-                        pcntl_signal_dispatch();
-                        $this->runDaemon($job);
-                    }
-                } else {
-                    sleep($this->sleep);
-                }
-                pcntl_signal_dispatch();
-                $this->trigger(self::EVENT_AFTER_ITERATION);
-            }
-
-            \Yii::info('Daemon ' . $this->getProcessName() . ' pid ' . getmypid() . ' is stopped.');
-
-            return self::EXIT_CODE_NORMAL;
+        if (!file_put_contents($this->getPidPath(), getmypid())) {
+            $this->halt(ExitCode::UNSPECIFIED_ERROR, 'Can\'t create pid file ' . $this->getPidPath());
         }
-        $this->halt(self::EXIT_CODE_ERROR, 'Can\'t create pid file ' . $this->getPidPath());
+
+        $this->parentPID = getmypid();
+        \Yii::info('Daemon ' . $this->getProcessName() . ' pid ' . getmypid() . ' started.');
+        while (!self::$stopFlag) {
+            if (memory_get_usage() > $this->memoryLimit) {
+                \Yii::info('Daemon ' . $this->getProcessName() . ' pid ' .
+                    getmypid() . ' used ' . memory_get_usage() . ' bytes on ' . $this->memoryLimit .
+                    ' bytes allowed by memory limit');
+                break;
+            }
+            $this->trigger(self::EVENT_BEFORE_ITERATION);
+            $this->renewConnections();
+            $jobs = $this->defineJobs();
+            if ($jobs && !empty($jobs)) {
+                while (($job = $this->defineJobExtractor($jobs)) !== null) {
+                    //if no free workers, wait
+                    if ($this->isMultiInstance && (count(static::$currentJobs) >= $this->maxChildProcesses)) {
+                        \Yii::info('Reached maximum number of child processes. Waiting...');
+                        while (count(static::$currentJobs) >= $this->maxChildProcesses) {
+                            sleep(1);
+                            pcntl_signal_dispatch();
+                        }
+                        \Yii::info(
+                            'Free workers found: ' .
+                            ($this->maxChildProcesses - count(static::$currentJobs)) .
+                            ' worker(s). Delegate tasks.'
+                        );
+                    }
+                    pcntl_signal_dispatch();
+                    $this->runDaemon($job);
+                }
+            } else {
+                //\Yii::info('Job list is empty. Daemon sleeps for ' . $this->sleep . ' seconds');
+                sleep($this->sleep);
+            }
+            pcntl_signal_dispatch();
+            $this->trigger(self::EVENT_AFTER_ITERATION);
+        }
+
+        \Yii::info('Daemon ' . $this->getProcessName() . ' pid ' . getmypid() . ' is stopped.');
+
+        return ExitCode::OK;
     }
 
     /**
      * Delete pid file
+     * @return bool
+     * @throws ExitException
      */
     protected function deletePid()
     {
@@ -318,7 +330,7 @@ abstract class DaemonController extends Controller
     /**
      * PCNTL signals handler
      *
-     * @param int   $signo
+     * @param int $signo
      * @param array $siginfo
      * @param null $status
      */
@@ -357,30 +369,33 @@ abstract class DaemonController extends Controller
      * @param string $job
      *
      * @return boolean
+     * @throws Exception
+     * @throws ExitException
      */
     final public function runDaemon($job)
     {
         if ($this->isMultiInstance) {
             $this->flushLog();
             $pid = pcntl_fork();
+
             if ($pid == -1) {
                 return false;
-            } elseif ($pid !== 0) {
+            }
+            if ($pid !== 0) {
                 static::$currentJobs[$pid] = true;
-
                 return true;
+            }
+
+            $this->cleanLog();
+            $this->renewConnections();
+            //child process must die
+            $this->trigger(self::EVENT_BEFORE_JOB);
+            $status = $this->doJob($job);
+            $this->trigger(self::EVENT_AFTER_JOB);
+            if ($status) {
+                $this->halt(ExitCode::OK);
             } else {
-                $this->cleanLog();
-                $this->renewConnections();
-                //child process must die
-                $this->trigger(self::EVENT_BEFORE_JOB);
-                $status = $this->doJob($job);
-                $this->trigger(self::EVENT_AFTER_JOB);
-                if ($status) {
-                    $this->halt(self::EXIT_CODE_NORMAL);
-                } else {
-                    $this->halt(self::EXIT_CODE_ERROR, 'Child process #' . $pid . ' return error.');
-                }
+                $this->halt(ExitCode::UNSPECIFIED_ERROR, 'Child process #' . $pid . ' return error.');
             }
         } else {
             $this->trigger(self::EVENT_BEFORE_JOB);
@@ -395,18 +410,19 @@ abstract class DaemonController extends Controller
      * Stop process and show or write message
      *
      * @param $code int -1|0|1
-     * @param $message string
+     * @param null $message string
+     * @throws ExitException
      */
     protected function halt($code, $message = null)
     {
         if ($message !== null) {
-            if ($code == self::EXIT_CODE_ERROR) {
+            if ($code == ExitCode::UNSPECIFIED_ERROR) {
                 \Yii::error($message);
                 if (!$this->demonize) {
                     $message = Console::ansiFormat($message, [Console::FG_RED]);
                 }
             } else {
-                \Yii::trace($message);
+                \Yii::info($message);
             }
             if (!$this->demonize) {
                 $this->writeConsole($message);
@@ -419,8 +435,7 @@ abstract class DaemonController extends Controller
 
     /**
      * Renew connections
-     * @throws \yii\base\InvalidConfigException
-     * @throws \yii\db\Exception
+     * @throws Exception
      */
     protected function renewConnections()
     {
@@ -442,15 +457,18 @@ abstract class DaemonController extends Controller
     }
 
     /**
-     * @param string $daemon
+     * @param null $daemon
      *
      * @return string
+     * @throws ExitException
      */
     public function getPidPath($daemon = null)
     {
         $dir = \Yii::getAlias($this->pidDir);
         if (!file_exists($dir)) {
-            mkdir($dir, 0744, true);
+            if (!mkdir($dir, 0744, true) && !is_dir($dir)) {
+                $this->halt(ExitCode::UNSPECIFIED_ERROR, 'Can\'t create directory for pidDir');
+            }
         }
         $daemon = $this->getProcessName($daemon);
 
@@ -480,9 +498,9 @@ abstract class DaemonController extends Controller
     {
         if (!$this->demonize && is_resource(STDOUT)) {
             return parent::stdout($string);
-        } else {
-            return false;
         }
+
+        return false;
     }
 
     /**
@@ -496,9 +514,9 @@ abstract class DaemonController extends Controller
     {
         if (!$this->demonize && is_resource(\STDERR)) {
             return parent::stderr($string);
-        } else {
-            return false;
         }
+
+        return false;
     }
 
     /**
