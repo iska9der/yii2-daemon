@@ -72,6 +72,7 @@ abstract class DaemonController extends Controller
 
     protected $pidDir = "@runtime/daemons/pids";
 
+    protected $logClass = \yii\log\FileTarget::class;
     protected $logDir = "@runtime/daemons/logs";
 
     private $stdIn;
@@ -115,7 +116,7 @@ abstract class DaemonController extends Controller
                 'yii\db\*', // Don't include messages from db
             ],
         ];
-        $targets['daemon'] = new \yii\log\FileTarget($config);
+        $targets['daemon'] = new $this->logClass($config);
         \Yii::$app->getLog()->targets = $targets;
         \Yii::$app->getLog()->init();
     }
