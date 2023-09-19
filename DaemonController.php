@@ -74,6 +74,7 @@ abstract class DaemonController extends Controller
 
     protected $logClass = \yii\log\FileTarget::class;
     protected $logDir = "@runtime/daemons/logs";
+    protected $logInterval = 1000;
 
     private $stdIn;
     private $stdOut;
@@ -112,12 +113,14 @@ abstract class DaemonController extends Controller
             'levels' => ['error', 'warning', 'trace', 'info'],
             'logFile' => \Yii::getAlias($this->logDir) . DIRECTORY_SEPARATOR . $this->getProcessName() . '.log',
             'logVars' => [],
+            'exportInterval' => $this->logInterval,
             'except' => [
                 'yii\db\*', // Don't include messages from db
             ],
         ];
         $targets['daemon'] = new $this->logClass($config);
         \Yii::$app->getLog()->targets = $targets;
+        \Yii::$app->getLog()->flushInterval = $this->logInterval;
         \Yii::$app->getLog()->init();
     }
 
